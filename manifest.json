@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Andesmar — Extractor driv.in",
+  "version": "1.0",
+  "description": "Extrae datos de tms.driv.in para el Tablero de Derivación",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "host_permissions": ["https://tms.driv.in/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Andesmar Extractor"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://tms.driv.in/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
