@@ -495,6 +495,8 @@
   </div>
 
   <!-- Tabla -->
+  <div id="drivinOrphanPanel"></div>
+
   <div class="table-wrapper">
     <div class="table-header">
       <h2>Detalle de guías</h2>
@@ -1603,10 +1605,12 @@ function showSheetsError() {
 // ═══════════════════════════════════════════════════════════════
 
 // Cache y estado del polling
-let drivinCache       = {};  // { barraId: { status, route_started, approved_at, ... } }
-let drivinLastPoll    = null;
-let drivinInterval    = null;
-let drivinPollCnt     = 0;
+let drivinCache        = {};  // { barraId: { status, route_started, approved_at, ... } }
+let drivinLastPoll     = null;
+let drivinInterval     = null;
+let drivinPollCnt      = 0;
+let _drivinCntEntregado = 0;  // actualizado por buildSummary — usado por status bar
+let _drivinCntReparto   = 0;
 const DRIVIN_POLL_INTERVAL = 20 * 60 * 1000; // 20 minutos
 
 const DRIVIN_CACHE_LS_KEY  = 'andesmar_drivin_cache_v2';
@@ -1797,11 +1801,10 @@ function updateDrivinStatusBar() {
   const bar = document.getElementById('drivinStatusBar');
   if (!bar) return;
   if (!DRIVIN_SERVER_URL && !DRIVIN_PROXY_URL) { bar.style.display = 'none'; return; }
-  // Cuenta desde datosDrivinMap (bulk sync del día) — no desde drivinCache (proxy individual)
-  const allStatuses = Object.values(datosDrivinMap);
-  const cntEnt  = allStatuses.filter(d => d.status === 'approved').length;
-  const cntRep  = allStatuses.filter(d => d.status === 'pending').length;
-  const total   = allStatuses.length || drivinPollCnt;
+  // Misma fuente que los recuadros: contadores de visibleData calculados por buildSummary
+  const cntEnt = _drivinCntEntregado;
+  const cntRep = _drivinCntReparto;
+  const total  = drivinPollCnt;
   const nextMs  = drivinLastPoll ? (DRIVIN_POLL_INTERVAL - (Date.now() - drivinLastPoll.getTime())) : 0;
   const nextMin = Math.max(0, Math.ceil(nextMs / 60000));
   const lastStr = drivinLastPoll ? drivinLastPoll.toLocaleTimeString('es-AR', {hour:'2-digit',minute:'2-digit'}) : '—';
@@ -2609,6 +2612,7 @@ function applyFilters() {
 
   renderTable();
   buildSummary();
+  _updateOrphanPanel();
   document.getElementById('countBadge').textContent =
     filteredData.length.toLocaleString('es-AR') + ' guías';
 }
@@ -2770,6 +2774,50 @@ function filterByAnularRefact() {
   if (activeAnularRefactFilter) document.getElementById('card-anular')?.classList.add('active-filter');
 }
 
+function _updateOrphanPanel() {
+  const panel = document.getElementById('drivinOrphanPanel');
+  if (!panel) return;
+
+  if (window._drivinServerFilter !== 'entregado' || Object.keys(datosDrivinMap).length === 0) {
+    panel.innerHTML = '';
+    return;
+  }
+
+  // Códigos aprobados en Drivin según el sync del día
+  const approvedCodes = new Set(
+    Object.entries(datosDrivinMap)
+      .filter(([, v]) => v.status === 'approved')
+      .map(([k]) => k)
+  );
+
+  // Códigos conocidos en allData (por searchValue y por barra)
+  const knownCodes = new Set();
+  allData.forEach(d => {
+    const sv = getDrivinSearchValue(d);
+    if (sv && sv.valor) knownCodes.add(sv.valor);
+    const bc = safeStr(d.row[COL.CODIGO_BARRA]).trim();
+    if (bc) knownCodes.add(bc);
+  });
+
+  const orphans = [...approvedCodes].filter(c => !knownCodes.has(c)).sort();
+
+  if (!orphans.length) {
+    panel.innerHTML = '';
+    return;
+  }
+
+  panel.innerHTML = `
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 16px;margin:0 0 12px 0;">
+      <div style="font-weight:700;color:#166534;margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+        <span>📦 ${orphans.length} entregas confirmadas en Drivin no encontradas en el tablero</span>
+        <span style="font-weight:400;font-size:0.78rem;color:#4b7a59;">(pueden ser pickups u órdenes de otras delegaciones)</span>
+      </div>
+      <div style="font-size:0.76rem;color:#374151;display:flex;flex-wrap:wrap;gap:5px;">
+        ${orphans.map(c => `<span style="background:#dcfce7;padding:2px 8px;border-radius:4px;border:1px solid #bbf7d0;font-family:monospace;">${c}</span>`).join('')}
+      </div>
+    </div>`;
+}
+
 function filterByDrivinStatus(tipo) {
   window._drivinServerFilter = tipo;
   activeSiniestroFilter = false;
@@ -2831,6 +2879,7 @@ function buildSummary() {
     if (_dSt.pending && !_dSt.approved) cntEnReparto++;
     if (_dSt.approved) cntEntregadoDrivin++;
 
+
     if (d.derivacion.siniestro) {
       totalSiniestro++;
       kilosSiniestro += parseMoneda(d.row[COL.KILOS]);
@@ -2846,6 +2895,10 @@ function buildSummary() {
       gestionCounts[gObj.estado] = (gestionCounts[gObj.estado]||0) + 1;
     }
   });
+
+  // Exponer al status bar (misma fuente que los recuadros)
+  _drivinCntEntregado = cntEntregadoDrivin;
+  _drivinCntReparto   = cntEnReparto;
 
   // Anular/Refacturar: SIEMPRE usa allData (visibilidad total)
   allData.forEach(d => {

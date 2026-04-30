@@ -169,6 +169,9 @@ function syncPods(date) {
       var orders = routes[i].orders || routes[i].stops || (Array.isArray(routes[i]) ? routes[i] : []);
       for (var j = 0; j < orders.length; j++) {
         var o = orders[j];
+        // Solo procesar entregas (delivery) — excluir pickups y otros tipos
+        var cat = String(o.category || o.type || o.order_type || '').trim().toLowerCase();
+        if (cat && cat !== 'delivery') continue;
         var code = String(o.alt_code || o.reference || o.code || '').trim();
         if (!code) continue;
         var st  = String(o.status || o.state || 'pending').trim();
