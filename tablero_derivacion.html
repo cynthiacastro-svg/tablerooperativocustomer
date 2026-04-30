@@ -1761,13 +1761,47 @@ function startDrivinPolling() {
   drivinInterval = setInterval(pollDrivin, DRIVIN_POLL_INTERVAL);
 }
 
+// Auto-sync liviano: 1 llamada bulk syncPods cada 20 min — no consulta guía por guía
+let _drivinAutoSyncInterval = null;
+
+async function _autoSyncCycle() {
+  if (!DRIVIN_SERVER_URL) return;
+  try {
+    const hoy  = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const resp = await fetch(DRIVIN_SERVER_URL + '?action=syncPods&date=' + hoy);
+    const data = await resp.json();
+    if (data.ok) {
+      console.log('[Drivin AutoSync] syncPods OK:', data.rows, 'registros para', hoy);
+      await loadDatosDrivin();
+      drivinLastPoll = new Date();
+      drivinPollCnt  = data.rows || 0;
+      updateDrivinStatusBar();
+      buildSummary();
+    } else {
+      console.warn('[Drivin AutoSync] Error syncPods:', data.error, data.http_code ? '[HTTP ' + data.http_code + ']' : '');
+    }
+  } catch(e) {
+    console.warn('[Drivin AutoSync] Exception:', e.message);
+  }
+}
+
+function startDrivinAutoSync() {
+  _loadDrivinCacheLS();
+  loadDatosDrivin().then(() => updateDrivinStatusBar()); // carga inmediata desde Sheet, sin llamar a Drivin API
+  _autoSyncCycle(); // primer sync bulk al arrancar
+  if (_drivinAutoSyncInterval) clearInterval(_drivinAutoSyncInterval);
+  _drivinAutoSyncInterval = setInterval(_autoSyncCycle, DRIVIN_POLL_INTERVAL);
+}
+
 function updateDrivinStatusBar() {
   const bar = document.getElementById('drivinStatusBar');
   if (!bar) return;
-  if (!DRIVIN_PROXY_URL) { bar.style.display = 'none'; return; }
-  const cntEnt  = Object.values(drivinCache).filter(d => d.status === 'approved').length;
-  const cntRep  = Object.values(drivinCache).filter(d => d.route_started && d.status === 'pending').length;
-  const cntFail = Object.values(drivinCache).filter(d => d.status === 'rejected').length;
+  if (!DRIVIN_SERVER_URL && !DRIVIN_PROXY_URL) { bar.style.display = 'none'; return; }
+  // Cuenta desde datosDrivinMap (bulk sync del día) — no desde drivinCache (proxy individual)
+  const allStatuses = Object.values(datosDrivinMap);
+  const cntEnt  = allStatuses.filter(d => d.status === 'approved').length;
+  const cntRep  = allStatuses.filter(d => d.status === 'pending').length;
+  const total   = allStatuses.length || drivinPollCnt;
   const nextMs  = drivinLastPoll ? (DRIVIN_POLL_INTERVAL - (Date.now() - drivinLastPoll.getTime())) : 0;
   const nextMin = Math.max(0, Math.ceil(nextMs / 60000));
   const lastStr = drivinLastPoll ? drivinLastPoll.toLocaleTimeString('es-AR', {hour:'2-digit',minute:'2-digit'}) : '—';
@@ -1775,10 +1809,9 @@ function updateDrivinStatusBar() {
   bar.innerHTML = '<span>🚚 <strong style="color:#e2e8f0;">Drivin</strong></span>'
     + '<span>Última consulta: ' + lastStr + '</span>'
     + '<span>Próxima: ~' + nextMin + ' min</span>'
-    + '<span>' + drivinPollCnt + ' guías consultadas</span>'
-    + (cntRep  ? '<span class="dsb-ok">🚚 ' + cntRep  + ' en reparto</span>' : '')
-    + (cntEnt  ? '<span class="dsb-ok">✅ ' + cntEnt  + ' entregadas</span>' : '')
-    + (cntFail ? '<span class="dsb-err">✗ '  + cntFail + ' fallidas</span>'  : '');
+    + '<span>' + total + ' guías consultadas</span>'
+    + (cntRep ? '<span class="dsb-ok">🚚 ' + cntRep + ' en reparto</span>' : '')
+    + (cntEnt ? '<span class="dsb-ok">✅ ' + cntEnt + ' entregadas</span>' : '');
 }
 
 function getDrivinBadge(barraId, row) {
@@ -2131,7 +2164,7 @@ function processSheetRows(rows) {
   document.getElementById('uploadZone').style.display = 'none';
   document.getElementById('dashboard').style.display  = 'block';
   updateResumenJornada(); // Restaurar resumen de sesión
-  if (DRIVIN_PROXY_URL) startDrivinPolling(); // Polling Drivin automático cada 5 min
+  startDrivinAutoSync(); // Sync bulk cada 20 min: 1 llamada a Drivin API — el proxy solo se usa bajo demanda
   syncGestionFromHistorial(); // Sincroniza Estado/Fecha/Usuario desde historial (async, no bloquea)
 }
 
