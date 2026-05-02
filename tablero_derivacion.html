@@ -2666,6 +2666,7 @@ function esDeOperaciones(d) {
   const estado = gObj.estado || '';
   if (estado === 'derivar-ejec') return false;
   if (['gestionado-cliente','gestionado-ops','gestionado-drivin','anular-refacturar'].includes(estado)) return false;
+  if (_drivinStatusForRow(d).approved) return false;
   if (estado === 'derivar-ops') return true;
   if (d.derivacion.dest === 'OPERACIONES_URGENTE') return true;
   return false;
@@ -2678,6 +2679,7 @@ function esDeEjecutivo(d) {
   const estado = gObj.estado || '';
   if (estado === 'derivar-ops') return false;
   if (['gestionado-cliente','gestionado-ops','gestionado-drivin','anular-refacturar'].includes(estado)) return false;
+  if (_drivinStatusForRow(d).approved) return false;
   if (estado === 'derivar-ejec') return true;
   if (d.derivacion.dest === 'EJECUTIVO_SEGUIMIENTO') return true;
   return false;
@@ -2859,8 +2861,9 @@ function filterByCND(nombre) {
 
 function buildSummary() {
   loadGestionState();
-  // Base: visibleData (lo que el usuario puede ver). Para Devolver usa CND si está activo.
-  const base = visibleData.length ? visibleData : allData;
+  const soloVencCheck = !!(document.getElementById('filterVencido')?.checked);
+  // Cuando "Solo Vencidas" está activo, usar filteredData para que todos los recuadros reflejen el filtro
+  const base = soloVencCheck ? filteredData : (visibleData.length ? visibleData : allData);
   const baseWithCND = activeCNDFilter ? filteredData : base;
 
   let cntOps = 0, cntEjec = 0, cntDevolRem = 0, cntSinGestion = 0;
@@ -2920,8 +2923,20 @@ function buildSummary() {
   const byTipo = { Sucursales:0, Redespacho:0, Agencias:0 };
   base.forEach(d => { byTipo[d.tipoAg] = (byTipo[d.tipoAg]||0) + 1; });
 
-  const soloVenc = document.getElementById('filterVencido') && document.getElementById('filterVencido').checked;
-  const totalBaseCount = soloVenc ? totalVencido : base.length;
+  const soloVenc = soloVencCheck;
+  // Orphans: códigos Drivin aprobados no encontrados en el tablero (posibles pickups)
+  let orphansCount = 0;
+  if (Object.keys(datosDrivinMap).length > 0) {
+    const _approvedCodes = new Set(Object.entries(datosDrivinMap).filter(([,v]) => v.status === 'approved').map(([k]) => k));
+    const _knownCodes = new Set();
+    allData.forEach(d => {
+      const sv = getDrivinSearchValue(d); if (sv && sv.valor) _knownCodes.add(sv.valor);
+      const bc = safeStr(d.row[COL.CODIGO_BARRA]).trim(); if (bc) _knownCodes.add(bc);
+    });
+    orphansCount = [..._approvedCodes].filter(c => !_knownCodes.has(c)).length;
+  }
+  const netDrivin = Math.max(0, cntEntregadoDrivin - orphansCount);
+  const totalBaseCount = soloVenc ? totalVencido : (cntOps + cntEjec + netDrivin);
   const cardTotalLabel = soloVenc ? '🔴 Guías Vencidas' : '📋 Análisis Total';
 
   // Barra de estado de gestiones
@@ -2947,7 +2962,7 @@ function buildSummary() {
     <div class="card" style="border-color:#dc2626;cursor:pointer;" onclick="clearAllFiltersAndShow()">
       <div class="card-title" style="color:#dc2626;">${cardTotalLabel}</div>
       <div class="card-value" style="color:#dc2626;">${totalBaseCount.toLocaleString('es-AR')}</div>
-      <div class="card-sub">${kilosVencido.toFixed(0)} kg · universo visible</div>
+      <div class="card-sub">${soloVenc ? (kilosVencido.toFixed(0) + ' kg vencidas') : (cntOps + ' ops · ' + cntEjec + ' ejec · ' + netDrivin + ' drivin')}</div>
     </div>
     <div class="card siniestro" onclick="filterBySiniestro()" title="Filtrar por Riesgo Siniestro (+15d sin movimiento)">
       <div class="card-title">⚠ Riesgo Siniestro (+15d)</div>
@@ -2987,8 +3002,8 @@ function buildSummary() {
     </div>
     <div class="card" style="border-color:#86efac;cursor:pointer;" onclick="filterByDrivinStatus('entregado')">
       <div class="card-title" style="color:#166534;">✅ Entregado Drivin</div>
-      <div class="card-value" style="color:#166534;">${cntEntregadoDrivin.toLocaleString('es-AR')}</div>
-      <div class="card-sub">Confirmado por Drivin</div>
+      <div class="card-value" style="color:#166534;">${netDrivin.toLocaleString('es-AR')}</div>
+      <div class="card-sub">Confirmado por Drivin${orphansCount ? ' <span style="font-size:0.7rem;color:#6b7280;">(+ ' + orphansCount + ' no en tablero)</span>' : ''}</div>
     </div>
     <div class="card" onclick="filterByDest('')" style="border-color:#94a3b8;">
       <div class="card-title">🏢 Por tipo de destino</div>
@@ -3151,8 +3166,8 @@ function renderTable() {
           <option value="pendiente"          ${accion==='pendiente'?'selected':''}>⏳ Pendiente</option>
           <option value="gestionado-cliente" ${accion==='gestionado-cliente'?'selected':''}>✅ Customer Service</option>
           <option value="gestionado-ops"     ${accion==='gestionado-ops'?'selected':''}>🔧 Operaciones</option>
-          ${isEjec || isAdmin ? '<option value="derivar-ops" ' + (accion==='derivar-ops'?'selected':'') + '>↗️ Derivar a Operaciones</option>' : ''}
-          ${isOpsRole || isAdmin ? '<option value="derivar-ejec" ' + (accion==='derivar-ejec'?'selected':'') + '>↗️ Derivar a Ejecutivo</option>' : ''}
+          ${(isEjec || isAdmin) ? '<option value="derivar-ops" ' + (accion==='derivar-ops'?'selected':'') + '>↗️ Derivar a Operaciones</option>' : (accion === 'derivar-ops' ? '<option value="derivar-ops" selected>↗️ Derivado a Operaciones</option>' : '')}
+          ${(isOpsRole || isAdmin) ? '<option value="derivar-ejec" ' + (accion==='derivar-ejec'?'selected':'') + '>↗️ Derivar a Ejecutivo</option>' : (accion === 'derivar-ejec' ? '<option value="derivar-ejec" selected>↗️ Derivado a Ejecutivo</option>' : '')}
           <option value="derivar-agencias" ${accion==='derivar-agencias'?'selected':''}>🏪 Derivar a Agencias</option>
           <option value="anular-refacturar" ${accion==='anular-refacturar'?'selected':''}>🔴 Anular/Refacturar</option>
           ${accion==='gestionado-drivin' ? '<option value="gestionado-drivin" selected>🚚 Gestionado Drivin (Auto)</option>' : ''}
@@ -3206,7 +3221,7 @@ function renderTable() {
         <td>${get(COL.EJECUTIVO_SEGUIMIENTO) || '—'}</td>
         <td>${d.vencido ? (diasHtml + (get(COL.DIAS_DESVIO) ? `<br><span class="dias-desvio-label">+${get(COL.DIAS_DESVIO)}d</span>` : '')) : '—'}</td>
         <td>
-          <span class="badge ${d.derivacion.class}">${d.derivacion.label}</span>
+          <span class="badge ${d.derivacion.class}"${(accion === 'derivar-ejec' || accion === 'derivar-ops') ? ' style="opacity:0.35;font-size:0.68rem;"' : ''}>${d.derivacion.label}</span>
           ${getDrivinBadge(codBarra, r)}
           <div class="action-btns">
             ${codBarra && isDrivinEnabled(d) ? `<a class="btn-circle btn-traza" title="Trazabilidad Driv.in" onclick="loadDrivPanel('${codBarra}','${detGuia}','${remitoCliente}')"><i class="fas fa-truck"></i></a>` : ''}
